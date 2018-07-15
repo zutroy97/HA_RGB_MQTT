@@ -14,45 +14,54 @@ CRGB leds[NUM_LEDS];
 #define BLUEPIN 14  // D5
 #define DATA_PIN 4  // D2
 
-#define NUMBER_PATTERNS 7
-CRGBPalette16 palettes[NUMBER_PATTERNS] = {
-    RainbowColors_p,  //0
-    RainbowStripesColors_p, // 1
-    HeatColors_p,   // 2
-    CloudColors_p,  // 3
-    PartyColors_p,  // 4
-    LavaColors_p,   // 5
-    OceanColors_p // 6
-};
+CRGBPalette16 gradientSunrise = HeatColors_p;
+//#define NUMBER_PATTERNS 5
+// CRGBPalette16 palettes[NUMBER_PATTERNS] = {
+//     RainbowColors_p,  //0
+//     HeatColors_p,   // 1
+//     CloudColors_p,  // 2
+//     PartyColors_p,  // 3
+//     OceanColors_p // 4
+// };
 
 enum FadeStates_t {
+  FADE_IDLE,
+  FADE_BEGIN,
+  FADE_FADING,
+  FADE_END
+};
+enum LoopStates_t {
   IDLE = 0,
-  BEGIN_FADE,
-  FADING,
-  END_FADE,
   COLOR_CHANGED,
   BEGIN_FLASH,
+  LOOP_FADING,
   FLASH_LIT_BEGIN,
   FLASH_LIT,
   FLASH_LIT_END,
   FLASH_DARK_BEGIN,
-  FLASH_DARK, // 10
+  FLASH_DARK, // 8
   FLASH_DARK_END,
   END_FLASH,
   BEGIN_SUNRISE,
   SUNRISE_RUNNING,
-  SUNRISE_END
+  SUNRISE_END,
+  LIGHTING_BEGIN,
+  LIGHTING_STRIKES,
+  LIGHTING_END
 };
 typedef struct Status_t
 {
-  CRGB CurrentColor;
-  CRGB NewColor;
-  uint8_t FadeAmount : 8;
-  FadeStates_t FadeState : 4;
-  uint16_t timer_ms;
-  uint8_t FlashTimerOnMs;
-  uint8_t FlashTimerOffMs;
-  uint8_t sunriseLengthMinutes;
+  CRGB CurrentColor;  // Color currently displayed
+  CRGB NewColor;      // Desired new color to display
+  uint8_t FadeStep : 4; // Amount to adjust fade per loop
+  uint8_t FadeStepDelay : 4;  // Time (in 10ms steps) between fade loops (Higher the number the longer it takes to fade)
+  LoopStates_t LoopState : 5; // State of the main loop
+  FadeStates_t FadeState : 3; // State of the fade loop
+  uint16_t timer_10ms; // General purpose 10 ms timer used by main loop
+  uint8_t timerFade_10ms; // 10ms time used by fade loop
+  uint8_t FlashTimerOn_10ms; // Time (in ms) for LEDs to be on for flash
+  uint8_t FlashTimerOff_10ms; // Time (in ms) for LEDs to be off for flash
+  uint8_t PaletteDurationMinutes; // Time to cycle though entire gradient
 } ;
 
 Status_t status;
@@ -78,27 +87,28 @@ int8_t nblendU8TowardU8( uint8_t& cur, const uint8_t target, uint8_t amount)
 
 void FlashFast()
 {
-  Flash(100, 100); // 100ms on, 100ms off
+  Flash(10, 10); // 100ms on, 100ms off
 }
 
 void FlashSlow()
 {
-  Flash(500,500); // 500ms on, 500ms off
+  Flash(50,50); // 500ms on, 500ms off
 }
 void Flash(uint8_t OnDurationMs, uint8_t OffDurationMs)
 {
   if (OnDurationMs == 0) OnDurationMs = 1;
   if (OffDurationMs == 0) OffDurationMs = 1;
-  status.FadeState = BEGIN_FLASH;
-  status.FlashTimerOnMs = OnDurationMs;
-  status.FlashTimerOffMs = OffDurationMs;
+  status.LoopState = BEGIN_FLASH;
+  status.FlashTimerOn_10ms = OnDurationMs;
+  status.FlashTimerOff_10ms = OffDurationMs;
   status.CurrentColor = CRGB::Red;
   status.CurrentColor = CRGB::Black;
 }
 // Begin fading to NewColor
 void FadeToColor()
 {
-  status.FadeState = BEGIN_FADE;
+  status.LoopState = LOOP_FADING;
+  status.FadeState = FADE_BEGIN;
 }
 
 void Off()
@@ -109,91 +119,158 @@ void Off()
 
 void Sunrise()
 {
-  status.FadeState = BEGIN_SUNRISE;
+  status.LoopState = BEGIN_SUNRISE;
 }
-void loopDoWork()
+
+void loopFade()
 {
   int8_t i = 0;
-  static uint8_t sunriseInterval = 0;
-  static uint8_t paletteIndex = 0;
-
-  switch(status.FadeState)
+  switch (status.FadeState)
   {
-    case IDLE:
+    case FADE_IDLE:
       break;
-    case BEGIN_FADE:
-      status.FadeState = FADING;
-      status.timer_ms = 10;
+    case FADE_BEGIN:
+      status.FadeState = FADE_FADING;
+      status.timerFade_10ms = status.FadeStepDelay;
       break;
-    case FADING:
-      if (status.timer_ms > 0) return; // Not time to work yet.
-      i = nblendU8TowardU8( status.CurrentColor.red, status.NewColor.red, status.FadeAmount)
-        + nblendU8TowardU8( status.CurrentColor.green, status.NewColor.green, status.FadeAmount)
-        + nblendU8TowardU8( status.CurrentColor.blue,  status.NewColor.blue,  status.FadeAmount);
+    case FADE_FADING:
+      if (status.timerFade_10ms > 0) return; // Not time to work yet.
+      i = nblendU8TowardU8( status.CurrentColor.red, status.NewColor.red, status.FadeStep)
+        + nblendU8TowardU8( status.CurrentColor.green, status.NewColor.green, status.FadeStep)
+        + nblendU8TowardU8( status.CurrentColor.blue,  status.NewColor.blue,  status.FadeStep);
       leds[0] = status.CurrentColor;
       show();      
       if (i == 0){
-        status.FadeState = END_FADE; return; // Fade complete.
+        status.FadeState = FADE_END; return; // Fade complete.
       }
-      status.timer_ms = 10; // Wait 10ms before next fade step
+      status.timerFade_10ms = status.FadeStepDelay; // Wait 10ms before next fade step
       break;
-    case END_FADE:
-      status.FadeState = COLOR_CHANGED;
+    case FADE_END:
+      //Serial << "FADE_END\n";
+      break;
+  }
+}
+void loopDoWork()
+{
+  static uint8_t sunriseInterval = 0; // Number of 10ms counts before finding next gradient
+  static uint8_t paletteIndex = 0; // Which slice of the gradient to grab
+  static uint8_t lighting_flashes = 0; // Number of lighting flashes
+  EVERY_N_MILLIS(10)
+  {
+    if (status.timer_10ms > 0)
+    {
+      status.timer_10ms--;
+    }
+    if (status.timerFade_10ms > 0)
+    {
+      status.timerFade_10ms--;
+    }
+  }
+  //Serial << "LoopState: " << status.LoopState << "\n";
+  loopFade();
+  switch(status.LoopState)
+  {
+    case IDLE:
+      break;
+    case LOOP_FADING:
+      switch (status.FadeState){
+        case FADE_IDLE:
+          status.FadeState = FADE_BEGIN;
+          break;
+        case FADE_END:
+          //Serial << "FADE_END COLOR_CHANGED\n";
+          status.LoopState = COLOR_CHANGED;
+          status.FadeState = FADE_IDLE;
+          break;
+      }
       break;
     case COLOR_CHANGED:
-      status.FadeState = IDLE;
+      status.LoopState = IDLE;
       break;
     case BEGIN_FLASH:
-      status.FadeState = FLASH_DARK_BEGIN;
+      status.LoopState = FLASH_DARK_BEGIN;
       break;
     case FLASH_DARK_BEGIN:
       leds[0] = status.NewColor;
       show();
-      status.timer_ms = status.FlashTimerOffMs;
-      status.FadeState = FLASH_DARK;
+      status.timer_10ms = status.FlashTimerOff_10ms;
+      status.LoopState = FLASH_DARK;
       break;
     case FLASH_DARK:
-      if (status.timer_ms > 0) return; // Not time to work yet   
-      status.FadeState = FLASH_DARK_END; 
+      if (status.timer_10ms > 0) return; // Not time to work yet   
+      status.LoopState = FLASH_DARK_END; 
       break;
     case FLASH_DARK_END:
-      status.FadeState = FLASH_LIT_BEGIN;
+      status.LoopState = FLASH_LIT_BEGIN;
       break;
     case FLASH_LIT_BEGIN:
       leds[0] = status.CurrentColor;
       show();
-      status.timer_ms = status.FlashTimerOnMs;
-      status.FadeState = FLASH_LIT;
+      status.timer_10ms = status.FlashTimerOn_10ms;
+      status.LoopState = FLASH_LIT;
       break;
     case FLASH_LIT:
-      if (status.timer_ms > 0) return; // Not time to work yet 
-      status.FadeState = FLASH_LIT_END;
+      if (status.timer_10ms > 0) return; // Not time to work yet 
+      status.LoopState = FLASH_LIT_END;
       break;
     case FLASH_LIT_END:
-      status.FadeState = FLASH_DARK_BEGIN;
+      status.LoopState = FLASH_DARK_BEGIN;
       break;
     case END_FLASH:
       break;
     case BEGIN_SUNRISE:
-      sunriseInterval = (uint8_t)(((status.sunriseLengthMinutes * 60.0) / 256.0) * 100); // 
+      sunriseInterval = (uint8_t)(((status.PaletteDurationMinutes * 60.0) / 241.0) * 100); // 
       Serial << "sunriseInterval: " << sunriseInterval << "\n";
-      status.FadeState = SUNRISE_RUNNING;
+      status.LoopState = SUNRISE_RUNNING;
       paletteIndex = 0;
       break;
     case SUNRISE_RUNNING:
-      if (status.timer_ms > 0) return; // Not time yet
-      if (paletteIndex == 240)
+      if (status.timer_10ms > 0) return; // Not time yet
+      if (paletteIndex == 241)
       {
-        status.FadeState = SUNRISE_END;
+        status.LoopState = SUNRISE_END;
         return;
       }
-      leds[0] = ColorFromPalette(palettes[2], paletteIndex);
+      leds[0] = ColorFromPalette(gradientSunrise, paletteIndex);
       show();
       Serial << "SUNRISE: Index " << paletteIndex << " RGB " << leds[0].red << " " << leds[0].green << " " << leds[0].blue << "\n";
       paletteIndex++;
-      status.timer_ms = sunriseInterval;
+      status.timer_10ms = sunriseInterval;
       break;
     case SUNRISE_END:
+      status.LoopState = IDLE;
+      break;
+    case LIGHTING_BEGIN:
+      lighting_flashes = random8(3, 8); // Number of flashes
+      leds[0] = CHSV(255, 0, 51); // 1st flash isn't bright
+      show();
+      delay(random8(4,10)); // each flash only lasts 4-10 ms
+      leds[0] = CRGB::Black;
+      show();
+      status.timer_10ms = random8(10, 15); // delay 100 to 150 ms
+      status.LoopState = LIGHTING_STRIKES;
+      break;
+    case LIGHTING_STRIKES:
+      if (status.timer_10ms > 0) return; // Not yet time
+      if (lighting_flashes == 0){
+        status.LoopState = LIGHTING_END;
+        return; // No more flashes
+      } 
+      lighting_flashes--;
+      leds[0] = CHSV(255, 0, (255/random8(1,3))); // return strokes are brighter
+      show();
+      delay(random8(4,10)); // Flash last between 4 and 10 ms.
+      leds[0] = CRGB::Black;
+      show();
+      status.timer_10ms = (5 + random8(10)); // 50 to 150 ms delay until next flash
+      break;
+    case LIGHTING_END:
+      //status.LoopState = IDLE;
+      status.CurrentColor = CRGB::Black;
+      FadeToColor();
+      break;
+    default:
+      Serial << "UNKNOWN STATE! " << status.LoopState << "\n";
       break;
   }
 }
@@ -212,7 +289,7 @@ void setColorInstantly()
   status.CurrentColor = status.NewColor;
   leds[0] = status.CurrentColor;
   show();
-  status.FadeState = COLOR_CHANGED;
+  status.LoopState = COLOR_CHANGED;
 }
 
 void setup() {
@@ -225,58 +302,63 @@ void setup() {
 
   status.CurrentColor = CRGB::Black;
   status.NewColor = CRGB::Red;
-  status.FadeState = IDLE;
-  status.FadeAmount = 5;
+  status.LoopState = IDLE;
+  status.FadeState = FADE_IDLE;
+  status.FadeStep = 1;
+  status.FadeStepDelay = 5;
 
   Serial.begin(115200);
   FastLED.addLeds<NEOPIXEL, DATA_PIN>(leds, NUM_LEDS);
   Serial.println(F("READY:"));
-  status.sunriseLengthMinutes = 1;
-  Sunrise();
+  status.PaletteDurationMinutes = 1;
+  //Sunrise();
+  //FadeToColor();
+  //FlashSlow();
+  status.LoopState = LIGHTING_BEGIN;
 }
 
 void loop() 
 {
-
-  switch (status.FadeState)
+  loopDoWork();
+  switch (status.LoopState)
   {
     case IDLE:
       break;
-    case BEGIN_FADE:
-      Serial << "BEGIN FADE\n";
-      break;
-    case FADING:
-      break;
-    case END_FADE:
-      Serial << "END FADE\n";
-      break;
+    // case BEGIN_FADE:
+    //   Serial << "BEGIN FADE\n";
+    //   break;
+    // case FADING:
+    //   break;
+    // case END_FADE:
+    //   Serial << "END FADE\n";
+    //   break;
     case COLOR_CHANGED:
       Serial << "COLOR CHANGED: RGB " << status.CurrentColor.red << " " << status.CurrentColor.green << " " << status.CurrentColor.blue << "\n";
       break;
   }
-  loopDoWork();
 
-  EVERY_N_MILLISECONDS(1)
-  {
-    if (status.timer_ms > 0)
-    {
-      status.timer_ms--;
-    }
-  }
+  delay(10);
+  // if (status.timer_10ms > 0)
+  // {
+  //   status.timer_10ms--;
+  // }
+  // if (status.timerFade_10ms > 0)
+  // {
+  //   status.timerFade_10ms--;
+  // }
 
-
-  /*
+  
   //periodically set random pixel to a random color, to show the fading
-  EVERY_N_MILLISECONDS( 5000 ) {
-    if (status.FadeState == IDLE)
-    {
-      CRGB color = CHSV( random8(), 255, 255);
-      //status.NewColor = CRGB::White;
-      status.NewColor = color;
-      FadeToColor();
-      Serial << "New color: RGB " << status.NewColor.red << " " << status.NewColor.green << " " << status.NewColor.blue << "\n";
-    }
-  }
-*/
-  delay(1);
+  // EVERY_N_SECONDS( 5 ) {
+  //   if (status.LoopState == IDLE)
+  //   {
+  //     CRGB color = CHSV( random8(), 255, 255);
+  //     //status.NewColor = CRGB::White;
+  //     status.NewColor = color;
+  //     FadeToColor();
+  //     Serial << "New color: RGB " << status.NewColor.red << " " << status.NewColor.green << " " << status.NewColor.blue << "\n";
+  //   }
+  // }
+
+
 }
