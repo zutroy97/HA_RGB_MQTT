@@ -52,7 +52,7 @@ CRGBPalette16 PaletteCurrent = HeatColors_p;
 typedef struct EffectInfo_t{
   uint8_t lighting_flashes  : 4;
   uint8_t lighting_count    : 4;
-  uint8_t gradientInterval;
+  uint16_t gradientInterval;
   uint8_t gradientIndex;
   uint8_t PaletteLimitUpper;
   uint8_t PaletteLimitLower;  
@@ -202,18 +202,7 @@ void loopDoWork()
       status.timerFade_10ms--;
     }    
   }
-  // EVERY_N_MILLIS(10)
-  // {
-  //   if (status.timer_10ms > 0)
-  //   {
-  //     status.timer_10ms--;
-  //   }
-  //   if (status.timerFade_10ms > 0)
-  //   {
-  //     status.timerFade_10ms--;
-  //   }
-  // }
-  //Serial << "LoopState: " << status.LoopState << "\n";
+
   loopFade();
   switch(status.LoopState)
   {
@@ -275,8 +264,8 @@ void loopDoWork()
       break;
     case PALETTE_BEGIN:
       f = (effectLighting.PaletteLimitUpper - effectLighting.PaletteLimitLower) * 1.0f;
-      effectLighting.gradientInterval = (uint8_t)(((status.PaletteDurationMinutes * 60.0) / f) * 100); // 
-      //Serial << "f " << f << " gradientInterval: " << effectLighting.gradientInterval << "\n";
+      effectLighting.gradientInterval = (uint16_t)(((status.PaletteDurationMinutes * 60.0) / f) * 100); // 
+      Serial << "f " << f << " gradientInterval: " << effectLighting.gradientInterval << "\n";
       status.LoopState = PALETTE_LOOP_BEGIN;
       break;
     case PALETTE_LOOP_BEGIN:
@@ -397,7 +386,7 @@ void setup() {
   Serial.begin(115200);
   FastLED.addLeds<NEOPIXEL, DATA_PIN>(leds, NUM_LEDS);
   Serial.println(F("READY:"));
-  Sunrise(1, 255);
+  Sunrise(30, 255);
   //OceanColors(1, 2);
   //FadeToColor();
   //FlashSlow(100);
@@ -434,9 +423,10 @@ void loop()
       break;
   }
 
-  delay(10);
   yield();
   ESP.wdtFeed();
+  delay(10);
+
   //periodically set random pixel to a random color, to show the fading
   // EVERY_N_SECONDS( 5 ) {
   //   if (status.LoopState == IDLE)
