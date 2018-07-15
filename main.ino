@@ -14,15 +14,7 @@ CRGB leds[NUM_LEDS];
 #define BLUEPIN 14  // D5
 #define DATA_PIN 4  // D2
 
-CRGBPalette16 gradientSunrise = HeatColors_p;
-//#define NUMBER_PATTERNS 5
-// CRGBPalette16 palettes[NUMBER_PATTERNS] = {
-//     RainbowColors_p,  //0
-//     HeatColors_p,   // 1
-//     CloudColors_p,  // 2
-//     PartyColors_p,  // 3
-//     OceanColors_p // 4
-// };
+
 
 enum FadeStates_t {
   FADE_IDLE,
@@ -42,13 +34,30 @@ enum LoopStates_t {
   FLASH_DARK, // 8
   FLASH_DARK_END,
   END_FLASH,
-  BEGIN_SUNRISE,
-  SUNRISE_RUNNING,
-  SUNRISE_END,
+  PALETTE_BEGIN,
+  PALETTE_LOOP_BEGIN,
+  PALETTE_RUNNING,
+  PALETTE_LOOP_END,
+  PALETTE_END,
   LIGHTING_BEGIN,
+  LIGHTING_LOOP_BEGIN,
   LIGHTING_STRIKES,
+  LIGHTING_LOOP_END,
+  LIGHTING_LOOP_DELAY,
   LIGHTING_END
 };
+
+CRGBPalette16 PaletteCurrent = HeatColors_p;
+
+typedef struct EffectInfo_t{
+  uint8_t lighting_flashes  : 4;
+  uint8_t lighting_count    : 4;
+  uint8_t gradientInterval;
+  uint8_t gradientIndex;
+  uint8_t PaletteLimitUpper;
+  uint8_t PaletteLimitLower;  
+};
+
 typedef struct Status_t
 {
   CRGB CurrentColor;  // Color currently displayed
@@ -62,9 +71,12 @@ typedef struct Status_t
   uint8_t FlashTimerOn_10ms; // Time (in ms) for LEDs to be on for flash
   uint8_t FlashTimerOff_10ms; // Time (in ms) for LEDs to be off for flash
   uint8_t PaletteDurationMinutes; // Time to cycle though entire gradient
+
+  uint8_t Repeat; // Number of times to repeat. 255 = forever
 } ;
 
 Status_t status;
+EffectInfo_t effectLighting;
 
 // Helper function that blends one uint8_t toward another by a given amount
 int8_t nblendU8TowardU8( uint8_t& cur, const uint8_t target, uint8_t amount)
@@ -85,24 +97,33 @@ int8_t nblendU8TowardU8( uint8_t& cur, const uint8_t target, uint8_t amount)
   return 1;
 }
 
-void FlashFast()
+void FlashFast(uint8_t NumberOfTimes)
 {
-  Flash(10, 10); // 100ms on, 100ms off
+  Flash(10, 10, NumberOfTimes); // 100ms on, 100ms off
+}
+void FlashFastForever()
+{
+  Flash(10, 10, 255); // 100ms on, 100ms off
 }
 
-void FlashSlow()
+void FlashSlow(uint8_t NumberOfTimes)
 {
-  Flash(50,50); // 500ms on, 500ms off
+  Flash(50,50, NumberOfTimes); // 500ms on, 500ms off  
 }
-void Flash(uint8_t OnDurationMs, uint8_t OffDurationMs)
+void FlashSlowForever()
 {
-  if (OnDurationMs == 0) OnDurationMs = 1;
-  if (OffDurationMs == 0) OffDurationMs = 1;
+  Flash(50,50, 255); // 500ms on, 500ms off
+}
+void Flash(uint8_t OnDuration10Ms, uint8_t OffDuration10Ms, uint8_t RepeatCount)
+{
+  if (OnDuration10Ms == 0) OnDuration10Ms = 1;
+  if (OffDuration10Ms == 0) OffDuration10Ms = 1;
   status.LoopState = BEGIN_FLASH;
-  status.FlashTimerOn_10ms = OnDurationMs;
-  status.FlashTimerOff_10ms = OffDurationMs;
+  status.FlashTimerOn_10ms = OnDuration10Ms;
+  status.FlashTimerOff_10ms = OffDuration10Ms;
   status.CurrentColor = CRGB::Red;
-  status.CurrentColor = CRGB::Black;
+  status.NewColor = CRGB::Black;
+  status.Repeat = RepeatCount;
 }
 // Begin fading to NewColor
 void FadeToColor()
@@ -117,9 +138,24 @@ void Off()
   FadeToColor();
 }
 
-void Sunrise()
+void OceanColors(uint8_t DurationInMinutes, uint8_t Repeat)
 {
-  status.LoopState = BEGIN_SUNRISE;
+  status.LoopState = PALETTE_BEGIN;
+  status.PaletteDurationMinutes = DurationInMinutes;
+  effectLighting.PaletteLimitLower = 0;
+  effectLighting.PaletteLimitUpper = 255;
+  PaletteCurrent = OceanColors_p;
+  status.Repeat = Repeat;
+}
+
+void Sunrise(uint8_t DurationInMinutes, uint8_t Repeat)
+{
+  status.LoopState = PALETTE_BEGIN;
+  status.PaletteDurationMinutes = DurationInMinutes;
+  effectLighting.PaletteLimitLower = 0;
+  effectLighting.PaletteLimitUpper = 240;
+  PaletteCurrent = HeatColors_p;
+  status.Repeat = Repeat;
 }
 
 void loopFade()
@@ -152,10 +188,10 @@ void loopFade()
 }
 void loopDoWork()
 {
-  static uint8_t sunriseInterval = 0; // Number of 10ms counts before finding next gradient
-  static uint8_t paletteIndex = 0; // Which slice of the gradient to grab
-  static uint8_t lighting_flashes = 0; // Number of lighting flashes
-  EVERY_N_MILLIS(10)
+  int8_t i = 0;
+  float f = 0.0;
+
+  EVERY_N_MILLIS_I(ticktock, 10)
   {
     if (status.timer_10ms > 0)
     {
@@ -164,8 +200,19 @@ void loopDoWork()
     if (status.timerFade_10ms > 0)
     {
       status.timerFade_10ms--;
-    }
+    }    
   }
+  // EVERY_N_MILLIS(10)
+  // {
+  //   if (status.timer_10ms > 0)
+  //   {
+  //     status.timer_10ms--;
+  //   }
+  //   if (status.timerFade_10ms > 0)
+  //   {
+  //     status.timerFade_10ms--;
+  //   }
+  // }
   //Serial << "LoopState: " << status.LoopState << "\n";
   loopFade();
   switch(status.LoopState)
@@ -193,6 +240,13 @@ void loopDoWork()
     case FLASH_DARK_BEGIN:
       leds[0] = status.NewColor;
       show();
+      if (status.Repeat == 0)
+      {
+        status.LoopState = END_FLASH;
+        return;
+      }
+      if (status.Repeat < 255) status.Repeat--;
+      //Serial << "Repeat: " << status.Repeat << "\n";
       status.timer_10ms = status.FlashTimerOff_10ms;
       status.LoopState = FLASH_DARK;
       break;
@@ -217,31 +271,53 @@ void loopDoWork()
       status.LoopState = FLASH_DARK_BEGIN;
       break;
     case END_FLASH:
+      status.LoopState = IDLE;
       break;
-    case BEGIN_SUNRISE:
-      sunriseInterval = (uint8_t)(((status.PaletteDurationMinutes * 60.0) / 241.0) * 100); // 
-      Serial << "sunriseInterval: " << sunriseInterval << "\n";
-      status.LoopState = SUNRISE_RUNNING;
-      paletteIndex = 0;
+    case PALETTE_BEGIN:
+      f = (effectLighting.PaletteLimitUpper - effectLighting.PaletteLimitLower) * 1.0f;
+      effectLighting.gradientInterval = (uint8_t)(((status.PaletteDurationMinutes * 60.0) / f) * 100); // 
+      //Serial << "f " << f << " gradientInterval: " << effectLighting.gradientInterval << "\n";
+      status.LoopState = PALETTE_LOOP_BEGIN;
       break;
-    case SUNRISE_RUNNING:
-      if (status.timer_10ms > 0) return; // Not time yet
-      if (paletteIndex == 241)
+    case PALETTE_LOOP_BEGIN:
+      if (status.Repeat == 0)
       {
-        status.LoopState = SUNRISE_END;
+        status.LoopState = PALETTE_END;
         return;
       }
-      leds[0] = ColorFromPalette(gradientSunrise, paletteIndex);
-      show();
-      Serial << "SUNRISE: Index " << paletteIndex << " RGB " << leds[0].red << " " << leds[0].green << " " << leds[0].blue << "\n";
-      paletteIndex++;
-      status.timer_10ms = sunriseInterval;
+      if (status.Repeat < 255) status.Repeat--;
+      effectLighting.gradientIndex = effectLighting.PaletteLimitLower;
+      status.timer_10ms = effectLighting.gradientInterval;
+      status.LoopState = PALETTE_RUNNING;
       break;
-    case SUNRISE_END:
+    case PALETTE_RUNNING:
+      if (status.timer_10ms > 0) return; // Not time yet
+      if (effectLighting.gradientIndex == effectLighting.PaletteLimitUpper)
+      {
+        status.LoopState = PALETTE_LOOP_END;
+        return;
+      }
+      leds[0] = ColorFromPalette(PaletteCurrent, effectLighting.gradientIndex);
+      show();
+      Serial << "SUNRISE: Index " << effectLighting.gradientIndex << " RGB " << leds[0].red << " " << leds[0].green << " " << leds[0].blue << "\n";
+      effectLighting.gradientIndex++;
+      status.timer_10ms = effectLighting.gradientInterval;
+      break;
+    case PALETTE_LOOP_END:
+      status.LoopState = PALETTE_LOOP_BEGIN;
+      break;
+    case PALETTE_END:
       status.LoopState = IDLE;
       break;
     case LIGHTING_BEGIN:
-      lighting_flashes = random8(3, 8); // Number of flashes
+      effectLighting.lighting_count = random8(3, 7);
+      //Serial << "lighting_count start: " << effectLighting.lighting_count << "\n";
+      status.LoopState = LIGHTING_LOOP_BEGIN;
+      break;
+    case LIGHTING_LOOP_BEGIN:
+      effectLighting.lighting_count--;
+      //Serial << "lighting_count: " << effectLighting.lighting_count << "\n";
+      effectLighting.lighting_flashes = random8(3, 8); // Number of flashes
       leds[0] = CHSV(255, 0, 51); // 1st flash isn't bright
       show();
       delay(random8(4,10)); // each flash only lasts 4-10 ms
@@ -252,17 +328,29 @@ void loopDoWork()
       break;
     case LIGHTING_STRIKES:
       if (status.timer_10ms > 0) return; // Not yet time
-      if (lighting_flashes == 0){
-        status.LoopState = LIGHTING_END;
+      if (effectLighting.lighting_flashes == 0){
+        status.LoopState = LIGHTING_LOOP_END;
         return; // No more flashes
       } 
-      lighting_flashes--;
+      effectLighting.lighting_flashes--;
       leds[0] = CHSV(255, 0, (255/random8(1,3))); // return strokes are brighter
       show();
       delay(random8(4,10)); // Flash last between 4 and 10 ms.
       leds[0] = CRGB::Black;
       show();
       status.timer_10ms = (5 + random8(10)); // 50 to 150 ms delay until next flash
+      break;
+    case LIGHTING_LOOP_END:
+      if (effectLighting.lighting_count == 0){
+        status.LoopState = LIGHTING_END;
+        return;
+      }
+      status.timer_10ms = (50 + random8(85)); // 500 to 1350 ms delay
+      status.LoopState = LIGHTING_LOOP_DELAY;
+      break;
+    case LIGHTING_LOOP_DELAY:
+      if (status.timer_10ms > 0) return; // not time yet
+      status.LoopState = LIGHTING_LOOP_BEGIN;
       break;
     case LIGHTING_END:
       //status.LoopState = IDLE;
@@ -274,7 +362,6 @@ void loopDoWork()
       break;
   }
 }
-
 
 void show()
 {
@@ -310,11 +397,11 @@ void setup() {
   Serial.begin(115200);
   FastLED.addLeds<NEOPIXEL, DATA_PIN>(leds, NUM_LEDS);
   Serial.println(F("READY:"));
-  status.PaletteDurationMinutes = 1;
-  //Sunrise();
+  Sunrise(1, 255);
+  //OceanColors(1, 2);
   //FadeToColor();
-  //FlashSlow();
-  status.LoopState = LIGHTING_BEGIN;
+  //FlashSlow(100);
+  //status.LoopState = LIGHTING_BEGIN;
 }
 
 void loop() 
@@ -332,22 +419,24 @@ void loop()
     // case END_FADE:
     //   Serial << "END FADE\n";
     //   break;
+    case PALETTE_LOOP_BEGIN:
+      Serial << "PALETTE_LOOP_BEGIN\n"; break;
+    case PALETTE_LOOP_END:
+      Serial << "PALETTE_LOOP_END\n"; break;
     case COLOR_CHANGED:
       Serial << "COLOR CHANGED: RGB " << status.CurrentColor.red << " " << status.CurrentColor.green << " " << status.CurrentColor.blue << "\n";
+      break;
+    case PALETTE_END:
+      Serial << "PALETTE END\n";
+      break;
+    case END_FLASH:
+      Serial << "FLASH END\n";
       break;
   }
 
   delay(10);
-  // if (status.timer_10ms > 0)
-  // {
-  //   status.timer_10ms--;
-  // }
-  // if (status.timerFade_10ms > 0)
-  // {
-  //   status.timerFade_10ms--;
-  // }
-
-  
+  yield();
+  ESP.wdtFeed();
   //periodically set random pixel to a random color, to show the fading
   // EVERY_N_SECONDS( 5 ) {
   //   if (status.LoopState == IDLE)
