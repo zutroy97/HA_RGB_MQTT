@@ -1,6 +1,8 @@
+#include <ArduinoJson.h>
+
 #include <Arduino.h>
-//#include <Homie.h>
-template<class T> inline Print &operator <<(Print &obj, T arg) { obj.print(arg); return obj; }
+#include <Homie.h>
+//template<class T> inline Print &operator <<(Print &obj, T arg) { obj.print(arg); return obj; }
 
 #define FASTLED_ESP8266_NODEMCU_PIN_ORDER
 
@@ -13,8 +15,6 @@ CRGB leds[NUM_LEDS];
 #define GREENPIN 12 // D6
 #define BLUEPIN 14  // D5
 #define DATA_PIN 4  // D2
-
-
 
 enum FadeStates_t {
   FADE_IDLE,
@@ -77,6 +77,34 @@ typedef struct Status_t
 
 Status_t status;
 EffectInfo_t effectLighting;
+StaticJsonBuffer<200> jsonBuffer;
+
+HomieNode nodeLed("json", "light"); //("light", "switch") ID of light, type of switch
+
+bool jsonReceivedHandler(const HomieRange& range, const String& value)
+{
+  Homie.getLogger() << "JSON!: " << value << endl;
+  //JsonObject& root = jsonBuffer.parseObject(value.toCharArray());
+  JsonObject& root = jsonBuffer.parseObject(value);
+  if (!root.success())
+  {
+    Serial.println(F("parseObject() failed"));
+    return false;
+  }
+
+  if (root.containsKey("state"))
+  {
+    if (strcmp(root["state"], "OFF"))
+    {
+      Off();
+      return true;
+    }
+  }
+  if (root.containsKey("flash"))
+  {
+
+  }
+}
 
 // Helper function that blends one uint8_t toward another by a given amount
 int8_t nblendU8TowardU8( uint8_t& cur, const uint8_t target, uint8_t amount)
@@ -158,6 +186,7 @@ void Sunrise(uint8_t DurationInMinutes, uint8_t Repeat)
   status.Repeat = Repeat;
 }
 
+// Don't call directly; handled from loopDoWork()
 void loopFade()
 {
   int8_t i = 0;
@@ -265,7 +294,7 @@ void loopDoWork()
     case PALETTE_BEGIN:
       f = (effectLighting.PaletteLimitUpper - effectLighting.PaletteLimitLower) * 1.0f;
       effectLighting.gradientInterval = (uint16_t)(((status.PaletteDurationMinutes * 60.0) / f) * 100); // 
-      Serial << "f " << f << " gradientInterval: " << effectLighting.gradientInterval << "\n";
+      //Serial << "f " << f << " gradientInterval: " << effectLighting.gradientInterval << "\n";
       status.LoopState = PALETTE_LOOP_BEGIN;
       break;
     case PALETTE_LOOP_BEGIN:
@@ -288,7 +317,7 @@ void loopDoWork()
       }
       leds[0] = ColorFromPalette(PaletteCurrent, effectLighting.gradientIndex);
       show();
-      Serial << "SUNRISE: Index " << effectLighting.gradientIndex << " RGB " << leds[0].red << " " << leds[0].green << " " << leds[0].blue << "\n";
+      //Serial << "PALETTE: Index " << effectLighting.gradientIndex << " RGB " << leds[0].red << " " << leds[0].green << " " << leds[0].blue << "\n";
       effectLighting.gradientIndex++;
       status.timer_10ms = effectLighting.gradientInterval;
       break;
@@ -348,6 +377,7 @@ void loopDoWork()
       break;
     default:
       Serial << "UNKNOWN STATE! " << status.LoopState << "\n";
+      Off();
       break;
   }
 }
@@ -368,6 +398,42 @@ void setColorInstantly()
   status.LoopState = COLOR_CHANGED;
 }
 
+void homieSetupHandler()
+{
+  //Homie.getLogger() << "homieSetupHandler!"  << endl;
+  nodeLed.advertise("ha").settable(jsonReceivedHandler);
+}
+
+void homieLoopHandler()
+{
+  loopDoWork();
+  switch (status.LoopState)
+  {
+    case IDLE:
+      break;
+    // case BEGIN_FADE:
+    //   Serial << "BEGIN FADE\n";
+    //   break;
+    // case FADING:
+    //   break;
+    // case END_FADE:
+    //   Serial << "END FADE\n";
+    //   break;
+    case PALETTE_LOOP_BEGIN:
+      Homie.getLogger() << "PALETTE_LOOP_BEGIN\n"; break;
+    case PALETTE_LOOP_END:
+      Homie.getLogger() << "PALETTE_LOOP_END\n"; break;
+    case COLOR_CHANGED:
+      Homie.getLogger() << "COLOR CHANGED: RGB " << status.CurrentColor.red << " " << status.CurrentColor.green << " " << status.CurrentColor.blue << "\n";
+      break;
+    case PALETTE_END:
+      Homie.getLogger() << "PALETTE END\n";
+      break;
+    case END_FLASH:
+      Homie.getLogger() << "FLASH END\n";
+      break;
+  }
+}
 void setup() {
   pinMode(REDPIN, OUTPUT); // RED
   pinMode(GREENPIN, OUTPUT); // GREEN
@@ -385,7 +451,11 @@ void setup() {
 
   Serial.begin(115200);
   FastLED.addLeds<NEOPIXEL, DATA_PIN>(leds, NUM_LEDS);
-  Serial.println(F("READY:"));
+  Homie_setFirmware("HA-LedFade", "1.0.0");
+  Homie.setSetupFunction(homieSetupHandler).setLoopFunction(homieLoopHandler);
+  Homie.setup();
+  //Serial.println(F("READY:"));
+  Homie.getLogger() << "READY" << endl;
   Sunrise(30, 255);
   //OceanColors(1, 2);
   //FadeToColor();
@@ -395,49 +465,5 @@ void setup() {
 
 void loop() 
 {
-  loopDoWork();
-  switch (status.LoopState)
-  {
-    case IDLE:
-      break;
-    // case BEGIN_FADE:
-    //   Serial << "BEGIN FADE\n";
-    //   break;
-    // case FADING:
-    //   break;
-    // case END_FADE:
-    //   Serial << "END FADE\n";
-    //   break;
-    case PALETTE_LOOP_BEGIN:
-      Serial << "PALETTE_LOOP_BEGIN\n"; break;
-    case PALETTE_LOOP_END:
-      Serial << "PALETTE_LOOP_END\n"; break;
-    case COLOR_CHANGED:
-      Serial << "COLOR CHANGED: RGB " << status.CurrentColor.red << " " << status.CurrentColor.green << " " << status.CurrentColor.blue << "\n";
-      break;
-    case PALETTE_END:
-      Serial << "PALETTE END\n";
-      break;
-    case END_FLASH:
-      Serial << "FLASH END\n";
-      break;
-  }
-
-  yield();
-  ESP.wdtFeed();
-  delay(10);
-
-  //periodically set random pixel to a random color, to show the fading
-  // EVERY_N_SECONDS( 5 ) {
-  //   if (status.LoopState == IDLE)
-  //   {
-  //     CRGB color = CHSV( random8(), 255, 255);
-  //     //status.NewColor = CRGB::White;
-  //     status.NewColor = color;
-  //     FadeToColor();
-  //     Serial << "New color: RGB " << status.NewColor.red << " " << status.NewColor.green << " " << status.NewColor.blue << "\n";
-  //   }
-  // }
-
-
+  Homie.loop();
 }
