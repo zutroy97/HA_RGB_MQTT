@@ -77,33 +77,46 @@ typedef struct Status_t
 
 Status_t status;
 EffectInfo_t effectLighting;
-StaticJsonBuffer<200> jsonBuffer;
+
 
 HomieNode nodeLed("json", "light"); //("light", "switch") ID of light, type of switch
 
 bool jsonReceivedHandler(const HomieRange& range, const String& value)
 {
+  DynamicJsonBuffer jsonBuffer(500);
   Homie.getLogger() << "JSON!: " << value << endl;
   //JsonObject& root = jsonBuffer.parseObject(value.toCharArray());
   JsonObject& root = jsonBuffer.parseObject(value);
   if (!root.success())
   {
-    Serial.println(F("parseObject() failed"));
+    Homie.getLogger() <<  "parseObject() failed" << endl;
     return false;
   }
 
   if (root.containsKey("state"))
   {
-    if (strcmp(root["state"], "OFF"))
+    Homie.getLogger() << "contains state" << endl;
+    if (strcmp(root["state"], "OFF") == 0)
     {
+      Homie.getLogger() << "state = OFF" << endl;
       Off();
       return true;
     }
+  }
+  if (root.containsKey("color")) {
+    Homie.getLogger() << "changing Color" << endl;
+    status.NewColor.red = root["color"]["r"];
+    status.NewColor.green = root["color"]["g"];
+    status.NewColor.blue = root["color"]["b"];
+    FadeToColor();
+    Homie.getLogger() << "changed Color" << endl;
+    return true;
   }
   if (root.containsKey("flash"))
   {
 
   }
+  return false;
 }
 
 // Helper function that blends one uint8_t toward another by a given amount
@@ -185,7 +198,11 @@ void Sunrise(uint8_t DurationInMinutes, uint8_t Repeat)
   PaletteCurrent = HeatColors_p;
   status.Repeat = Repeat;
 }
-
+void dumpColors()
+{
+  Homie.getLogger() << "CURRENT  R:" << status.CurrentColor.red << "\tG:" << status.CurrentColor.green << "\tB:" << status.CurrentColor.blue << endl;
+  Homie.getLogger() << "NewColor R:" << status.NewColor.red << "\tG:" << status.NewColor.green << "\tB:" << status.NewColor.blue << endl;
+}
 // Don't call directly; handled from loopDoWork()
 void loopFade()
 {
@@ -204,14 +221,15 @@ void loopFade()
         + nblendU8TowardU8( status.CurrentColor.green, status.NewColor.green, status.FadeStep)
         + nblendU8TowardU8( status.CurrentColor.blue,  status.NewColor.blue,  status.FadeStep);
       leds[0] = status.CurrentColor;
-      show();      
+      show(); 
+      //dumpColors();
       if (i == 0){
         status.FadeState = FADE_END; return; // Fade complete.
       }
       status.timerFade_10ms = status.FadeStepDelay; // Wait 10ms before next fade step
       break;
     case FADE_END:
-      //Serial << "FADE_END\n";
+      Homie.getLogger() << "FADE_END\n";
       break;
   }
 }
@@ -433,6 +451,7 @@ void homieLoopHandler()
       Homie.getLogger() << "FLASH END\n";
       break;
   }
+  delay(5);
 }
 void setup() {
   pinMode(REDPIN, OUTPUT); // RED
@@ -466,4 +485,5 @@ void setup() {
 void loop() 
 {
   Homie.loop();
+
 }
