@@ -4,17 +4,22 @@
 #include <Homie.h>
 //template<class T> inline Print &operator <<(Print &obj, T arg) { obj.print(arg); return obj; }
 
-#define FASTLED_ESP8266_NODEMCU_PIN_ORDER
+//#define FASTLED_ESP8266_NODEMCU_PIN_ORDER
 
 #include <FastLED.h>
 
 #define NUM_LEDS 1
 CRGB leds[NUM_LEDS];
 // LED  ESP-8266
-#define REDPIN 13   // D7
-#define GREENPIN 12 // D6
-#define BLUEPIN 14  // D5
-#define DATA_PIN 4  // D2
+// #define REDPIN 13   // D7
+// #define GREENPIN 12 // D6
+// #define BLUEPIN 14  // D5
+// #define DATA_PIN 4  // D2
+
+#define REDPIN  D7
+#define GREENPIN D6
+#define BLUEPIN  D5
+
 
 enum FadeStates_t {
   FADE_IDLE,
@@ -58,10 +63,11 @@ typedef struct EffectInfo_t{
   uint8_t PaletteLimitLower;  
 };
 
+  CRGBPalette16 CurrentPalette = CRGBPalette16(CRGB::Black);
+  CRGBPalette16 TargetPalette = CRGBPalette16(CRGB::Red);
+
 typedef struct Status_t
 {
-  CRGB CurrentColor;  // Color currently displayed
-  CRGB NewColor;      // Desired new color to display
   uint8_t FadeStep : 4; // Amount to adjust fade per loop
   uint8_t FadeStepDelay : 4;  // Time (in 10ms steps) between fade loops (Higher the number the longer it takes to fade)
   LoopStates_t LoopState : 5; // State of the main loop
@@ -84,32 +90,30 @@ HomieNode nodeLed("json", "light"); //("light", "switch") ID of light, type of s
 bool jsonReceivedHandler(const HomieRange& range, const String& value)
 {
   DynamicJsonBuffer jsonBuffer(500);
-  Homie.getLogger() << "JSON!: " << value << endl;
+  //Homie.getLogger() << "JSON!: " << value << endl;
   //JsonObject& root = jsonBuffer.parseObject(value.toCharArray());
   JsonObject& root = jsonBuffer.parseObject(value);
   if (!root.success())
   {
-    Homie.getLogger() <<  "parseObject() failed" << endl;
+    //Homie.getLogger() <<  "parseObject() failed" << endl;
     return false;
   }
 
   if (root.containsKey("state"))
   {
-    Homie.getLogger() << "contains state" << endl;
+    //Homie.getLogger() << "contains state" << endl;
     if (strcmp(root["state"], "OFF") == 0)
     {
-      Homie.getLogger() << "state = OFF" << endl;
+      //Homie.getLogger() << "state = OFF" << endl;
       Off();
       return true;
     }
   }
   if (root.containsKey("color")) {
-    Homie.getLogger() << "changing Color" << endl;
-    status.NewColor.red = root["color"]["r"];
-    status.NewColor.green = root["color"]["g"];
-    status.NewColor.blue = root["color"]["b"];
+    //Homie.getLogger() << "changing Color" << endl;
+    TargetPalette =  CRGBPalette16( CRGB(root["color"]["r"], root["color"]["g"], root["color"]["b"]));
     FadeToColor();
-    Homie.getLogger() << "changed Color" << endl;
+    //Homie.getLogger() << "changed Color" << endl;
     return true;
   }
   if (root.containsKey("flash"))
@@ -117,25 +121,6 @@ bool jsonReceivedHandler(const HomieRange& range, const String& value)
 
   }
   return false;
-}
-
-// Helper function that blends one uint8_t toward another by a given amount
-int8_t nblendU8TowardU8( uint8_t& cur, const uint8_t target, uint8_t amount)
-{
-  if( cur == target) {
-    return 0;
-  }
-
-  if( cur < target ) {
-    uint8_t delta = target - cur;
-    delta = scale8_video( delta, amount);
-    cur += delta;
-  } else {
-    uint8_t delta = cur - target;
-    delta = scale8_video( delta, amount);
-    cur -= delta;
-  }
-  return 1;
 }
 
 void FlashFast(uint8_t NumberOfTimes)
@@ -162,8 +147,8 @@ void Flash(uint8_t OnDuration10Ms, uint8_t OffDuration10Ms, uint8_t RepeatCount)
   status.LoopState = BEGIN_FLASH;
   status.FlashTimerOn_10ms = OnDuration10Ms;
   status.FlashTimerOff_10ms = OffDuration10Ms;
-  status.CurrentColor = CRGB::Red;
-  status.NewColor = CRGB::Black;
+  CurrentPalette = CRGBPalette16(CRGB::Red);
+  TargetPalette = CRGBPalette16(CRGB::Black);
   status.Repeat = RepeatCount;
 }
 // Begin fading to NewColor
@@ -175,7 +160,7 @@ void FadeToColor()
 
 void Off()
 {
-  status.NewColor = CRGB::Black;
+  TargetPalette = CRGBPalette16(CRGB::Black);
   FadeToColor();
 }
 
@@ -200,13 +185,23 @@ void Sunrise(uint8_t DurationInMinutes, uint8_t Repeat)
 }
 void dumpColors()
 {
-  Homie.getLogger() << "CURRENT  R:" << status.CurrentColor.red << "\tG:" << status.CurrentColor.green << "\tB:" << status.CurrentColor.blue << endl;
-  Homie.getLogger() << "NewColor R:" << status.NewColor.red << "\tG:" << status.NewColor.green << "\tB:" << status.NewColor.blue << endl;
+  CRGB rgb = ColorFromPalette(CurrentPalette, 0, 255);
+  Homie.getLogger() << "CURRENT  R:" << rgb.red << "\tG:" << rgb.green << "\tB:" << rgb.blue << endl;
+  rgb = ColorFromPalette(TargetPalette, 0, 255);
+  Homie.getLogger() << "NewColor R:" << rgb.red << "\tG:" << rgb.green << "\tB:" << rgb.blue << endl;
+}
+
+bool colorsEqual()
+{
+  CRGB cur = ColorFromPalette(CurrentPalette, 0, 255);
+  CRGB tar = ColorFromPalette(TargetPalette, 0, 255);
+  return ((cur.r == tar.r) && (cur.g == tar.g) && (cur.b == tar.b));
 }
 // Don't call directly; handled from loopDoWork()
 void loopFade()
 {
   int8_t i = 0;
+  CRGB rgb;
   switch (status.FadeState)
   {
     case FADE_IDLE:
@@ -217,19 +212,21 @@ void loopFade()
       break;
     case FADE_FADING:
       if (status.timerFade_10ms > 0) return; // Not time to work yet.
-      i = nblendU8TowardU8( status.CurrentColor.red, status.NewColor.red, status.FadeStep)
-        + nblendU8TowardU8( status.CurrentColor.green, status.NewColor.green, status.FadeStep)
-        + nblendU8TowardU8( status.CurrentColor.blue,  status.NewColor.blue,  status.FadeStep);
-      leds[0] = status.CurrentColor;
+      nblendPaletteTowardPalette( CurrentPalette, TargetPalette, status.FadeStep);
+      leds[0] = ColorFromPalette(CurrentPalette, 0, 255);
       show(); 
       //dumpColors();
-      if (i == 0){
-        status.FadeState = FADE_END; return; // Fade complete.
+      //rgb = ColorFromPalette(status.NewPalette, 0, 255);
+      //if (rgb.red == leds[0].red && rgb.blue == leds[0].blue && rgb.green == leds[0].green ){
+      if (colorsEqual()){
+        Homie.getLogger() << "loopFade() Setting FadeEnd.\n";
+        status.FadeState = FADE_END; 
+        return; // Fade complete.
       }
       status.timerFade_10ms = status.FadeStepDelay; // Wait 10ms before next fade step
       break;
     case FADE_END:
-      Homie.getLogger() << "FADE_END\n";
+      //Homie.getLogger() << "loopFade() FADE_END\n";
       break;
   }
 }
@@ -274,7 +271,7 @@ void loopDoWork()
       status.LoopState = FLASH_DARK_BEGIN;
       break;
     case FLASH_DARK_BEGIN:
-      leds[0] = status.NewColor;
+      leds[0] = ColorFromPalette(TargetPalette, 0, 255);
       show();
       if (status.Repeat == 0)
       {
@@ -294,7 +291,7 @@ void loopDoWork()
       status.LoopState = FLASH_LIT_BEGIN;
       break;
     case FLASH_LIT_BEGIN:
-      leds[0] = status.CurrentColor;
+      leds[0] = ColorFromPalette(CurrentPalette, 0, 255);      
       show();
       status.timer_10ms = status.FlashTimerOn_10ms;
       status.LoopState = FLASH_LIT;
@@ -390,7 +387,7 @@ void loopDoWork()
       break;
     case LIGHTING_END:
       //status.LoopState = IDLE;
-      status.CurrentColor = CRGB::Black;
+      TargetPalette = CRGBPalette16(CRGB::Black);
       FadeToColor();
       break;
     default:
@@ -402,16 +399,16 @@ void loopDoWork()
 
 void show()
 {
-  CRGB* rgb = FastLED.leds();
-  analogWrite(REDPIN,   rgb->r );
-  analogWrite(GREENPIN, rgb->g );
-  analogWrite(BLUEPIN,  rgb->b );
+  //CRGB* rgb = FastLED.leds();
+  analogWrite(REDPIN,   leds[0].r );
+  analogWrite(GREENPIN, leds[0].g );
+  analogWrite(BLUEPIN,  leds[0].b );
 }
 
 void setColorInstantly()
 {
-  status.CurrentColor = status.NewColor;
-  leds[0] = status.CurrentColor;
+  CurrentPalette = TargetPalette;
+  leds[0] = ColorFromPalette(CurrentPalette, 0, 255);
   show();
   status.LoopState = COLOR_CHANGED;
 }
@@ -438,20 +435,19 @@ void homieLoopHandler()
     //   Serial << "END FADE\n";
     //   break;
     case PALETTE_LOOP_BEGIN:
-      Homie.getLogger() << "PALETTE_LOOP_BEGIN\n"; break;
+      //Homie.getLogger() << "PALETTE_LOOP_BEGIN\n"; break;
     case PALETTE_LOOP_END:
-      Homie.getLogger() << "PALETTE_LOOP_END\n"; break;
+      //Homie.getLogger() << "PALETTE_LOOP_END\n"; break;
     case COLOR_CHANGED:
-      Homie.getLogger() << "COLOR CHANGED: RGB " << status.CurrentColor.red << " " << status.CurrentColor.green << " " << status.CurrentColor.blue << "\n";
+      Homie.getLogger() << "COLOR CHANGED: RGB " << leds[0].red << " " << leds[0].green << " " << leds[0].blue << "\n";
       break;
     case PALETTE_END:
-      Homie.getLogger() << "PALETTE END\n";
+      //Homie.getLogger() << "PALETTE END\n";
       break;
     case END_FLASH:
-      Homie.getLogger() << "FLASH END\n";
+      //Homie.getLogger() << "FLASH END\n";
       break;
   }
-  delay(5);
 }
 void setup() {
   pinMode(REDPIN, OUTPUT); // RED
@@ -461,21 +457,21 @@ void setup() {
   digitalWrite(GREENPIN, LOW);
   digitalWrite(BLUEPIN, LOW);    
 
-  status.CurrentColor = CRGB::Black;
-  status.NewColor = CRGB::Red;
+
+
   status.LoopState = IDLE;
   status.FadeState = FADE_IDLE;
-  status.FadeStep = 1;
+  status.FadeStep = 24;
   status.FadeStepDelay = 5;
 
   Serial.begin(115200);
-  FastLED.addLeds<NEOPIXEL, DATA_PIN>(leds, NUM_LEDS);
+  //FastLED.addLeds<NEOPIXEL, DATA_PIN>(leds, NUM_LEDS);
   Homie_setFirmware("HA-LedFade", "1.0.0");
   Homie.setSetupFunction(homieSetupHandler).setLoopFunction(homieLoopHandler);
   Homie.setup();
   //Serial.println(F("READY:"));
-  Homie.getLogger() << "READY" << endl;
-  Sunrise(30, 255);
+  //Homie.getLogger() << "READY" << endl;
+  //Sunrise(30, 255);
   //OceanColors(1, 2);
   //FadeToColor();
   //FlashSlow(100);
@@ -485,5 +481,6 @@ void setup() {
 void loop() 
 {
   Homie.loop();
-
+  //Homie.getLogger() << "loop" << endl;
+  delay(1);
 }
